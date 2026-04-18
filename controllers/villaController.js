@@ -1,4 +1,5 @@
 const Villa = require('../models/Villa');
+const User = require('../models/User');
 const Price = require('../models/Price');
 const Booking = require('../models/Booking');
 const BlockedDate = require('../models/BlockedDate');
@@ -172,11 +173,118 @@ const deletePriceOverride = async (req, res) => {
   }
 };
 
+// @desc    Add review to villa
+// @route   POST /api/villa/:id/reviews
+const createReview = async (req, res) => {
+  try {
+    const { rating, comment } = req.body;
+    const villa = await Villa.findById(req.params.id);
+
+    if (!villa) {
+      return res.status(404).json({ message: 'Villa not found' });
+    }
+
+    // Check if user has already reviewed
+    const alreadyReviewed = villa.reviews.find(
+      (r) => r.user.toString() === req.user.id.toString()
+    );
+
+    if (alreadyReviewed) {
+      return res.status(400).json({ message: 'Villa already reviewed' });
+    }
+
+    // Check if user has a past/completed booking
+    const hasBooking = await Booking.findOne({
+      villaId: villa._id,
+      guestId: req.user.id,
+      status: 'confirmed',
+      checkOutDate: { $lt: new Date() }
+    });
+
+    if (!hasBooking) {
+      return res.status(400).json({ message: 'You can only review villas you have stayed at.' });
+    }
+
+    const user = await User.findById(req.user.id);
+
+    const review = {
+      user: req.user.id,
+      fullName: user.fullName,
+      rating: Number(rating),
+      comment,
+    };
+
+    villa.reviews.push(review);
+    villa.numReviews = villa.reviews.length;
+    villa.averageRating =
+      villa.reviews.reduce((acc, item) => item.rating + acc, 0) /
+      villa.reviews.length;
+
+    await villa.save();
+    res.status(201).json({ message: 'Review added' });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// @desc    Get owner analytics
+// @route   GET /api/villa/analytics
+const getAnalytics = async (req, res) => {
+  try {
+    const villa = await Villa.findOne();
+    if (!villa) {
+      return res.status(404).json({ message: 'Villa not found' });
+    }
+
+    const bookings = await Booking.find({ 
+      villaId: villa._id,
+      status: 'confirmed'
+    });
+
+    // Total Revenue
+    const totalRevenue = bookings.reduce((acc, b) => acc + b.totalPrice, 0);
+    
+    // Total Nights
+    const totalNights = bookings.reduce((acc, b) => {
+      const start = new Date(b.checkInDate);
+      const end = new Date(b.checkOutDate);
+      const nights = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
+      return acc + nights;
+    }, 0);
+
+    // Monthly breakdown (Last 6 months)
+    const monthlyStats = {};
+    const sixMonthsAgo = new Date();
+    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+
+    bookings.forEach(b => {
+      const date = new Date(b.createdAt);
+      if (date >= sixMonthsAgo) {
+        const month = date.toLocaleString('default', { month: 'short' });
+        monthlyStats[month] = (monthlyStats[month] || 0) + b.totalPrice;
+      }
+    });
+
+    res.json({
+      totalRevenue,
+      totalBookings: bookings.length,
+      totalNights,
+      averageBookingValue: bookings.length > 0 ? (totalRevenue / bookings.length).toFixed(2) : 0,
+      monthlyRevenue: Object.entries(monthlyStats).map(([month, revenue]) => ({ month, revenue })),
+      recentReviews: villa.reviews.slice(-3).reverse() // Include a few recent reviews for context
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 module.exports = { 
   getVilla, 
   updateVilla, 
   checkAvailability, 
   getPrices, 
   setPriceOverride, 
-  deletePriceOverride 
+  deletePriceOverride,
+  createReview,
+  getAnalytics
 };

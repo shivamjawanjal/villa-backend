@@ -99,7 +99,9 @@ const verifyOTP = async (req, res) => {
       return res.status(400).json({ message: 'User is already verified' });
     }
 
-    // Check if OTP matches and is not expired
+    // Mark as verified and clear OTP
+    console.log(`Verifying OTP for ${email}. Code entered: ${otp}, Code in DB: ${user.otp}`);
+    
     if (user.otp !== otp) {
       return res.status(400).json({ message: 'Invalid verification code' });
     }
@@ -108,7 +110,6 @@ const verifyOTP = async (req, res) => {
       return res.status(400).json({ message: 'Verification code has expired' });
     }
 
-    // Mark as verified and clear OTP
     user.isVerified = true;
     user.otp = undefined;
     user.otpExpires = undefined;
@@ -143,6 +144,31 @@ const login = async (req, res) => {
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       return res.status(401).json({ message: 'Invalid credentials' });
+    }
+
+    // Check if verified (Only for guests)
+    if (!user.isVerified && user.role !== 'owner') {
+      // Generate NEW 6-digit OTP
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes from now
+
+      user.otp = otp;
+      user.otpExpires = otpExpires;
+      await user.save();
+
+      // Send OTP email
+      try {
+        await emailService.sendOTPEmail(user.email, otp);
+        console.log(`New Login OTP for ${user.email}: ${otp}`);
+      } catch (emailError) {
+        console.error('Failed to resend OTP email during login:', emailError);
+      }
+
+      return res.status(401).json({ 
+        message: 'Email not verified. A new verification code has been sent to your email.',
+        notVerified: true,
+        email: user.email 
+      });
     }
     
     res.json({
@@ -202,4 +228,66 @@ const updateProfile = async (req, res) => {
   }
 };
 
-module.exports = { register, login, getProfile, updateProfile, verifyOTP };
+// @desc    Request OTP for account deletion
+// @route   POST /api/auth/request-delete
+const requestDeleteOTP = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Generate 6-digit OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+    user.otp = otp;
+    user.otpExpires = otpExpires;
+    await user.save();
+
+    // Send OTP email
+    try {
+      await emailService.sendOTPEmail(user.email, otp);
+      console.log(`Delete Account OTP for ${user.email}: ${otp}`);
+    } catch (emailError) {
+      console.error('Failed to send delete OTP email:', emailError);
+    }
+
+    res.json({ message: 'A verification code has been sent to your email.' });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// @desc    Delete user profile
+// @route   DELETE /api/auth/profile
+const deleteProfile = async (req, res) => {
+  try {
+    const { otp } = req.body;
+
+    if (!otp) {
+      return res.status(400).json({ message: 'Please provide the verification code' });
+    }
+
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Verify OTP
+    if (user.otp !== otp) {
+      return res.status(400).json({ message: 'Invalid verification code' });
+    }
+
+    if (user.otpExpires < new Date()) {
+      return res.status(400).json({ message: 'Verification code has expired' });
+    }
+
+    await User.findByIdAndDelete(req.user.id);
+    res.json({ message: 'User deleted' });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+module.exports = { register, login, getProfile, updateProfile, verifyOTP, deleteProfile, requestDeleteOTP };

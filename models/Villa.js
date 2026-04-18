@@ -24,7 +24,18 @@ const villaSchema = new mongoose.Schema({
   cleaningFee: { type: Number, default: 50 },
   minStayDays: { type: Number, default: 1 },
   maxStayDays: { type: Number, default: 30 },
+  reviews: [
+    {
+      user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+      fullName: { type: String, required: true },
+      rating: { type: Number, required: true, min: 1, max: 5 },
+      comment: { type: String, required: true },
+      createdAt: { type: Date, default: Date.now }
+    }
+  ],
+  averageRating: { type: Number, default: 0 },
+  numReviews: { type: Number, default: 0 },
   createdAt: { type: Date, default: Date.now }
-});
+}, { timestamps: true });
 
 module.exports = mongoose.model('Villa', villaSchema);
